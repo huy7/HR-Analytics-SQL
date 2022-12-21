@@ -21,12 +21,12 @@ For all following metrics - we need a current snapshot of all the data as well a
 - MIN, MAX, STDDEV, Inter-quartile range and median
 
 #### 2.1.2. Department Level
-- All of the metrics as per the company level but at a department level, including an additional department level tenure metrics split by gender.
+All of the metrics as per the company level but at a department level, including an additional department level tenure metrics split by gender.
 
 #### 2.1.3. Title Level
-- Similar to the department level metrics but instead, at a title level of granularity.
+Similar to the department level metrics but instead, at a title level of granularity.
 
-- We will also need to generate similar insights for both department and title levels where we need employee count and average tenure for each level instead of company wide numbers.
+We will also need to generate similar insights for both department and title levels where we need employee count and average tenure for each level instead of company wide numbers.
 
 ### 1.2. Employee Deep Dive
 The following insights must be generated for the Employee Deep Dive tool that can spotlight recent events for a single employee over time:
