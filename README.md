@@ -40,11 +40,11 @@ The following insights must be generated for the Employee Deep Dive tool that ca
 
 #### Current Snapshot Reporting
 ___
-<img src=""/>
+<img src="/Company level.png"/>
 
 #### Historic Employee Deep Dive
 ___
-<img src=""/>
+<img src="/Employee Deepdive.png"/>
 
 
 ## 2. Exploration
