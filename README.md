@@ -250,4 +250,213 @@ ORDER BY row_count DESC;
 ```
 Interestingly, the majority of employees never change their job title , 40% change onced, and only 3000 employees change twice (3 different titles)
 
+## 4.1. Data cleaning
+
+We will adjust all of our relevant data fieldsdue to the data issues identified by HR Analytica
+
+We will be incrementing all of the data firelds except the arbitrary end date of 9999-01-01 - we will also need to cast our results back to a DATE data type as PostgreSQL interval addition forces the data type to a TIMESTAMP, which we'd like to avoid to keep the data type as similar to the original as possible
+
+TO account for the future updates and to maximise the efficiency and productivity for the HR Analytica team - we will be implementing our adjusted datasets as materialised views with exact original indexes as per original tables in the employees schema
+
+```sql
+DROP SCHEMA IF EXISTS mv_employees CASCADE;
+CREATE SCHEMA mv_employees;
+
+-- department
+DROP MATERIALIZED VIEW IF EXISTS mv_employees.department;
+CREATE MATERIALIZED VIEW mv_employees.department AS
+SELECT * FROM employees.department;
+
+-- employee
+DROP MATERIALIZED VIEW IF EXISTS mv_employees.employee;
+CREATE MATERIALIZED VIEW mv_employees.employee AS
+SELECT 
+  id,
+  (birth_date + INTERVAL '18 YEARS')::DATE AS birth_date,
+  first_name,
+  last_name,
+  gender,
+  (hire_date + INTERVAL '18 YEARS')::DATE AS hire_date
+FROM employees.employee;
+
+-- department_employee
+DROP MATERIALIZED VIEW IF EXISTS mv_employees.department_employee;
+CREATE MATERIALIZED VIEW mv_employees.department_employee AS
+SELECT
+  employee_id,
+  department_id,
+  (from_date + INTERVAL '18 YEARS')::DATE AS from_date,
+  CASE
+    WHEN to_date <> '9999-01-01'
+      THEN (to_date + INTERVAL '18 YEARS')::DATE
+    ELSE to_date
+    END AS to_date
+FROM employees.department_employee;
+
+-- department_mamanger
+DROP MATERIALIZED VIEW IF EXISTS mv_employees.department_manager;
+CREATE MATERIALIZED VIEW mv_employees.department_manager AS
+SELECT 
+  employee_id,
+  department_id,
+  (from_date + INTERVAL '18 YEARS')::DATE AS from_date,
+  CASE
+    WHEN to_date <> '9999-01-01'
+      THEN (to_date + INTERVAL '18 YEARS')::DATE
+    ELSE to_date
+    END AS to_date
+FROM employees.department_manager;
+
+-- salary
+DROP MATERIALIZED VIEW IF EXISTS mv_employees.salary;
+CREATE MATERIALIZED VIEW mv_employees.salary AS
+SELECT 
+  employee_id,
+  amount,
+  (from_date + INTERVAL '18 YEARS')::DATE AS from_date,
+  CASE
+    WHEN to_date <> '9999-01-01'
+      THEN (to_date + INTERVAL '18 YEARS')::DATE
+    ELSE to_date
+    END AS to_date
+FROM employees.salary;
+
+-- title
+DROP MATERIALIZED VIEW IF EXISTS mv_employees.title;
+CREATE MATERIALIZED VIEW mv_employees.title AS
+SELECT 
+  employee_id,
+  title,
+  (from_date + INTERVAL '18 YEARS')::DATE AS from_date,
+  CASE
+    WHEN to_date <> '9999-01-01' 
+      THEN (to_date + INTERVAL '18 YEARS')::DATE
+    ELSE to_date
+    END AS to_date
+FROM employees.title;
+
+```
+
+#### Index creation
+
+```sql
+CREATE UNIQUE INDEX ON mv_employees.employee USING btree(id);
+CREATE UNIQUE INDEX ON mv_employees.department_employee USING btree(employee_id, department_id);
+CREATE INDEX ON mv_employees.department_employee USING btree(department_id);
+CREATE UNIQUE INDEX ON mv_employees.department USING btree(id);
+CREATE UNIQUE INDEX ON mv_employees.department USING btree(dept_name);
+CREATE UNIQUE INDEX ON mv_employees.department_manager USING btree(employee_id, department_id);
+CREATE INDEX ON mv_employees.department_manager USING btree(department_id);
+CREATE UNIQUE INDEX ON mv_employees.salary USING btree(employee_id, from_date);
+CREATE UNIQUE INDEX ON mv_employees.TITLE USING btree(employee_id,title, from_date);
+```
+
+### Main analysis 
+
+After cleaning and transformation, we will go to the main analysis part where we gather data inputs for the Current Snapshot Views at Company, Department and Title level
+
+We need these information:
+1. number of employees (`employee` view)
+2. gender (`employee` view)
+3. tenure (using `hire_date` from `employee` view and current date to calculate)
+4. payrise (`salary` view and `LAG` function)
+5. salary summary satistics (`salary` view)
+6. to get the snapshot views at department and title level, we also need to access data from `department`,`department_employee` and `title` views.
+
+### Analysis Plan
+1. Use `LAG` function to get the previous salary for each employees from employee view
+2. Join step 1 with employee current salary information to get **payrise** information
+3. Join step 2 with employee view (get `hire_date` and `gender`), with title view (get `title`, `from_date`), with department_employee and department (get `dept_name` a.k.a department name, `from_date`)
+4. Apply `WHERE` filter to keep only current records
+5. Use `hire_date` to calculate **tenure**
+6. Use `from_date` from `title` and `department_employee` to calculate tenure for title and department snapshot
+7. Use summary function and window function to calculate various salary statistics (MEAN, MAX, INTERQUATILE, etc.) 
+8. COmbine all of these elements into a single final current snapshot view
+
+```sql
+
+DROP VIEW IF EXISTS mv_employees.current_employee_snapshot CASCADE;
+CREATE VIEW mv_employees.current_employee_snapshot AS
+-- apply LAG to get previous salary amount for all employees
+WITH previous_salary_cte AS (
+-- Step 1: Get previous salary
+  SELECT * FROM (
+    SELECT
+      employee_id,
+      to_date,
+      amount as salary,
+      LAG(amount) OVER (
+        PARTITION BY employee_id
+        ORDER BY to_date
+      ) AS prev_salary
+    FROM mv_employees.salary
+  ) salaries
+  WHERE to_date = '9999-01-01'
+),
+-- Step 2: Calculate payrise information - salary_percentage_change
+payrise_cte AS (
+  SELECT 
+    employee_id,
+    salary,
+    ROUND (
+      100 * (prev_salary) / prev_salary::NUMERIC,
+      2
+    ) AS salary_percentage_change
+  FROM previous_salary_cte
+),
+-- Step 3: Join step 2 with other table view
+joined_data_cte AS (
+  SELECT
+    employee.id AS employee_id,
+    employee.gender,
+    employee.hire_date,
+    payrise_cte.salary,
+    payrise_cte.salary_percentage_change,
+    title.title,
+    department.dept_name AS department,
+    title.from_date AS title_from_date,
+    department_employee.from_date AS department_from_date
+  FROM mv_employees.employee
+  INNER JOIN payrise_cte 
+    ON employee.id = payrise_cte.employee_id
+  INNER JOIN mv_employees.title AS title
+    ON employee.id = title.employee_id
+  INNER JOIN mv_employees.department_employee
+    ON employee.id = department_employee.employee_id
+  INNER JOIN mv_employees.department
+    ON department_employee.department_id = department.id
+-- Step 4: Apply filter to keep only current records
+  WHERE 
+    title.to_date = '9999-01-01'
+    AND department_employee.to_date = '9999-01-01'
+),
+-- Step 5, 6, 7, 8: Apply all of our calculation in this final output
+final_output AS (
+  SELECT
+    employee_id,
+    gender,
+    title,
+    salary,
+    department
+    salary_percentage_change,
+    -- Step 5: company tenure
+    DATE_PART('year', now()) - DATE_PART('year', hire_date) AS company_tenure_year,
+    -- Step 6: title and department tenure
+    DATE_PART('year', now()) - DATE_PART('year', title_from_date) AS title_tenure_year,
+    DATE_PART('year', now()) - DATE_PART('year', department_from_date) AS department_tenure_year
+    -- We skip step 7 because we don't need to aggregate salary at this point yet
+  FROM joined_data_cte
+)
+SELECT * FROM final_output;
+```
+
+Sample rows from `mv_employees.current_employee_snapshot`
+
+| employee_id | gender | title           | salary | department      | salary_percentage_change | company_tenure_years | title_tenure_years | department_tenure_years |
+|-------------|--------|-----------------|--------|-----------------|--------------------------|----------------------|--------------------|-------------------------|
+| 10001       | M      | Senior Engineer | 88958  | Development     | 4.54                     | 17                   | 17                 | 17                      |
+| 10002       | F      | Staff           | 72527  | Sales           | 0.78                     | 18                   | 7                  | 7                       |
+| 10003       | M      | Senior Engineer | 43311  | Production      | -0.89                    | 17                   | 8                  | 8                       |
+| 10004       | M      | Senior Engineer | 74057  | Production      | 4.75                     | 17                   | 8                  | 17                      |
+| 10005       | M      | Senior Staff    | 94692  | Human Resources | 3.54                     | 14                   | 7                  | 14                      |
 
