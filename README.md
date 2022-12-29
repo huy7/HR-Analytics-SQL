@@ -38,14 +38,19 @@ The following insights must be generated for the Employee Deep Dive tool that ca
 
 ### 1.3. Visual Outputs
 
-#### Current Snapshot Reporting
+<details> 
+  <summary> 1.3.1. Current Snapshot Reporting
+  </summary>
 ___
 <img src="/Company level.png"/>
+</details>
 
-#### Historic Employee Deep Dive
+<details> 
+  <summary> 1.3.2. Historic Employee Deep Dive
+  </summary>
 ___
 <img src="/Employee Deepdive.png"/>
-
+</details>
 
 ## 2. Exploration
 We've been alerted to the presence of data issues for all date related fields -> we need to inspect each table to see what adjustments we need to make
